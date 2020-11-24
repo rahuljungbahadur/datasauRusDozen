@@ -1,0 +1,125 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(datasauRus)
+```
+
+```{r}
+datasaurus_dozen %>%
+  ggplot(aes(x, y, col = dataset)) + 
+  geom_point(alpha = 0.8, show.legend = F) + 
+  facet_wrap(~dataset)
+```
+```{r}
+datasaurus_dozen %>%
+  group_by(dataset) %>%
+  summarise(across(.cols = c(x, y), .fns = list(mean = mean, sd = sd)),
+            cor_x_y = cor(x, y))
+```
+
+
+```{r}
+datasaurus_dozen %>%
+  count(dataset)
+```
+There are 142 obs for each dataset. THis is not a lot if you are trying to predict the dataset from the x and y coordinates of the points.
+
+To overcome this one can consider bootstraping.
+
+```{r}
+library(tidymodels)
+```
+```{r}
+dino_folds <- 
+  datasaurus_dozen %>%
+  mutate(dataset = factor(dataset)) %>%
+  bootstraps()
+```
+
+```{r}
+t1 <- dino_folds %>%
+  pull(splits) %>%
+  pluck(25)
+```
+
+```{r}
+## recipe
+
+rf_recipe <- 
+  recipe(dataset ~ ., data = dino_folds)
+
+
+## Model declaration
+rf_model <- 
+  rand_forest(trees = 1000) %>%
+  set_mode("classification") %>%
+  set_engine("ranger")
+
+rf_model %>% 
+  translate()
+
+## Setting Workflow
+rf_wf <- 
+  workflow() %>%
+  add_model(rf_model) %>%
+  add_formula(dataset ~ x + y)
+
+rf_wf
+```
+
+```{r}
+## fitting the model
+
+doParallel::registerDoParallel(cores = 14)
+
+rf_trainedModel <- 
+  rf_wf %>%
+  fit_resamples(
+    resamples = dino_folds,
+    control = control_resamples(save_pred = T)
+  )
+```
+
+```{r}
+rf_trainedModel %>%
+  collect_metrics()
+```
+
+```{r}
+rf_trainedModel %>%
+  collect_predictions() %>%
+  group_by(id) %>%
+  ppv(dataset, .pred_class)
+```
+
+## Getting Roc curves
+
+```{r}
+rf_trainedModel %>%
+  collect_predictions() %>%
+  group_by(id) %>%
+  roc_curve(dataset, .pred_away:.pred_x_shape) %>%
+  autoplot()
+
+```
+
+```{r}
+rf_trainedModel %>%
+  collect_predictions() %>%
+  conf_mat(dataset, .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+## datasets that were easy to confuse
+```{r}
+rf_trainedModel %>%
+  collect_predictions() %>%
+  filter(.pred_class  != dataset) %>%
+  conf_mat(dataset, .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+
+
